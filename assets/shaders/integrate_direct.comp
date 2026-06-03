@@ -1,0 +1,54 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+struct Particle {
+    vec4 pos;
+    vec4 vel;
+};
+
+layout(std430, binding = 0) readonly buffer InputParticles {
+    Particle particlesIn[];
+};
+
+layout(std430, binding = 1) writeonly buffer OutputParticles {
+    Particle particlesOut[];
+};
+
+layout(push_constant) uniform PushConstants {
+    float dt;
+    float G;
+    float softeningSqr;
+    uint numParticles;
+} pcs;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= pcs.numParticles) {
+        return;
+    }
+
+    vec4 myPos = particlesIn[index].pos;
+    vec4 myVel = particlesIn[index].vel;
+
+    vec3 accel = vec3(0.0);
+
+    for (uint i = 0; i < pcs.numParticles; ++i) {
+        if (i == index) {
+            continue;
+        }
+
+        vec4 otherPos = particlesIn[i].pos;
+        vec3 diff = otherPos.xyz - myPos.xyz;
+        float distSqr = dot(diff, diff) + pcs.softeningSqr;
+        float invDistCube = 1.0 / (distSqr * sqrt(distSqr));
+
+        accel += pcs.G * otherPos.w * diff * invDistCube;
+    }
+
+    vec3 newVel = myVel.xyz + accel * pcs.dt;
+    vec3 newPos = myPos.xyz + newVel * pcs.dt;
+
+    particlesOut[index].pos = vec4(newPos, myPos.w);
+    particlesOut[index].vel = vec4(newVel, myVel.w);
+}
