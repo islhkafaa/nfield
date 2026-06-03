@@ -32,6 +32,10 @@ Buffer::Buffer(VkDevice device, VkPhysicalDevice physicalDevice,
   }
 
   vkBindBufferMemory(m_device, m_buffer, m_memory, 0);
+
+  if (properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+    map();
+  }
 }
 
 Buffer::~Buffer() { cleanup(); }
@@ -65,8 +69,9 @@ Buffer &Buffer::operator=(Buffer &&other) noexcept {
 }
 
 void Buffer::cleanup() {
-  if (m_mapped) {
-    unmap();
+  if (m_mapped && m_memory != VK_NULL_HANDLE) {
+    vkUnmapMemory(m_device, m_memory);
+    m_mapped = nullptr;
   }
   if (m_buffer != VK_NULL_HANDLE) {
     vkDestroyBuffer(m_device, m_buffer, nullptr);
@@ -89,10 +94,8 @@ void *Buffer::map() {
 }
 
 void Buffer::unmap() {
-  if (m_mapped && m_memory != VK_NULL_HANDLE) {
-    vkUnmapMemory(m_device, m_memory);
-    m_mapped = nullptr;
-  }
+  // Keeping memory persistently mapped for performance; actual unmap happens in
+  // cleanup()
 }
 
 void Buffer::write(const void *data, VkDeviceSize size, VkDeviceSize offset) {
@@ -150,6 +153,19 @@ uint32_t Buffer::findMemoryType(VkPhysicalDevice physicalDevice,
     if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags &
                                     properties) == properties) {
       return i;
+    }
+  }
+
+  // Fallback if HOST_CACHED_BIT is requested but not supported
+  if (properties & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) {
+    VkMemoryPropertyFlags fallbackProperties =
+        properties & ~VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i) {
+      if ((typeFilter & (1 << i)) &&
+          (memProperties.memoryTypes[i].propertyFlags & fallbackProperties) ==
+              fallbackProperties) {
+        return i;
+      }
     }
   }
 

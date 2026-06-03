@@ -1,0 +1,37 @@
+#version 450
+
+// Separable 15-tap Gaussian blur.
+// Set pc.horizontal = 1 for the horizontal pass, 0 for vertical.
+layout(set = 0, binding = 0, rgba16f) uniform readonly  image2D inputImage;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outputImage;
+
+layout(push_constant) uniform PC {
+    int horizontal;  // 1 = horizontal pass, 0 = vertical pass
+} pc;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// 15-tap Gaussian weights (sigma ≈ 3)
+const int   RADIUS  = 7;
+const float WEIGHTS[8] = float[](
+    0.19448, 0.17408, 0.12438, 0.07094,
+    0.03233, 0.01178, 0.00344, 0.00076
+);
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size  = imageSize(inputImage);
+    if (coord.x >= size.x || coord.y >= size.y) return;
+
+    vec4 result = imageLoad(inputImage, coord) * WEIGHTS[0];
+
+    for (int i = 1; i <= RADIUS; ++i) {
+        ivec2 offset = (pc.horizontal == 1) ? ivec2(i, 0) : ivec2(0, i);
+        ivec2 pos1 = clamp(coord + offset, ivec2(0), size - 1);
+        ivec2 pos2 = clamp(coord - offset, ivec2(0), size - 1);
+        result += imageLoad(inputImage, pos1) * WEIGHTS[i];
+        result += imageLoad(inputImage, pos2) * WEIGHTS[i];
+    }
+
+    imageStore(outputImage, coord, result);
+}

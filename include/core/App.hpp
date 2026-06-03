@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Camera.hpp"
+#include "core/SimState.hpp"
 #include "vulkan/VulkanContext.hpp"
 #include <string_view>
 
@@ -33,6 +34,7 @@ private:
   GLFWwindow *m_window = nullptr;
   VulkanContext m_vulkanContext;
   Camera m_camera;
+  SimState m_simState;
 
   bool m_leftMouseDown = false;
   bool m_rightMouseDown = false;

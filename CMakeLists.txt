@@ -65,14 +65,23 @@ set(SPV_SHADERS "")
 compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/particle.vert" SPV_SHADERS)
 compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/particle.frag" SPV_SHADERS)
 compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/integrate_direct.comp" SPV_SHADERS)
+compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/integrate_bh.comp" SPV_SHADERS)
+compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/fullscreen.vert" SPV_SHADERS)
+compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/trail_decay.frag" SPV_SHADERS)
+compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/bloom_threshold.comp" SPV_SHADERS)
+compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/bloom_blur.comp" SPV_SHADERS)
+compile_shader("${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/bloom_composite.frag" SPV_SHADERS)
 
 add_executable(nfield
     src/main.cpp
     src/core/App.cpp
+    src/core/Preset.cpp
     src/vulkan/VulkanContext.cpp
     src/vulkan/Buffer.cpp
     src/vulkan/Pipeline.cpp
     include/core/App.hpp
+    include/core/Preset.hpp
+    include/core/SimState.hpp
     include/vulkan/VulkanContext.hpp
     include/vulkan/Buffer.hpp
     include/vulkan/Pipeline.hpp

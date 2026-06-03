@@ -20,6 +20,18 @@ struct GraphicsPipelineConfig {
 
 VkPipeline createGraphicsPipeline(const GraphicsPipelineConfig &config);
 
+struct FullscreenPipelineConfig {
+  VkDevice device;
+  VkRenderPass renderPass;
+  VkPipelineLayout pipelineLayout;
+  std::string vertexShaderPath; // fullscreen.vert
+  std::string fragmentShaderPath;
+  VkExtent2D extent;
+  bool additiveBlend = false; // true for composite pass
+};
+
+VkPipeline createFullscreenPipeline(const FullscreenPipelineConfig &config);
+
 struct ComputePipelineConfig {
   VkDevice device;
   VkPipelineLayout pipelineLayout;

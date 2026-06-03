@@ -1,0 +1,31 @@
+#version 450
+
+layout(set = 0, binding = 0, rgba16f) uniform readonly  image2D inputImage;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outputImage;
+
+layout(push_constant) uniform PC {
+    float threshold;   // pixels with luminance above this are kept
+} pc;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+float luminance(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size  = imageSize(inputImage);
+    if (coord.x >= size.x || coord.y >= size.y) return;
+
+    vec4 color = imageLoad(inputImage, coord);
+    float lum  = luminance(color.rgb);
+
+    // Soft knee: smoothly transition above threshold
+    float knee = 0.1;
+    float rq = clamp(lum - (pc.threshold - knee), 0.0, 2.0 * knee);
+    rq = (rq * rq) / (4.0 * knee + 1e-5);
+    float weight = max(rq, lum - pc.threshold) / max(lum, 1e-5);
+
+    imageStore(outputImage, coord, vec4(color.rgb * weight, color.a));
+}

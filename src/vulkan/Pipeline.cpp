@@ -179,6 +179,107 @@ VkPipeline createGraphicsPipeline(const GraphicsPipelineConfig &config) {
   return graphicsPipeline;
 }
 
+VkPipeline createFullscreenPipeline(const FullscreenPipelineConfig &config) {
+  auto vertCode = readShaderFile(config.vertexShaderPath);
+  auto fragCode = readShaderFile(config.fragmentShaderPath);
+
+  VkShaderModule vertModule = createShaderModule(config.device, vertCode);
+  VkShaderModule fragModule = createShaderModule(config.device, fragCode);
+
+  VkPipelineShaderStageCreateInfo stages[2]{};
+  stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+  stages[0].module = vertModule;
+  stages[0].pName = "main";
+  stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+  stages[1].module = fragModule;
+  stages[1].pName = "main";
+
+  // No vertex buffers - triangle is generated in the vertex shader
+  VkPipelineVertexInputStateCreateInfo vertexInput{};
+  vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+  VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+  inputAssembly.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+  inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+  VkViewport viewport{};
+  viewport.width = static_cast<float>(config.extent.width);
+  viewport.height = static_cast<float>(config.extent.height);
+  viewport.maxDepth = 1.0f;
+  VkRect2D scissor{{0, 0}, config.extent};
+
+  VkPipelineViewportStateCreateInfo viewportState{};
+  viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+  viewportState.viewportCount = 1;
+  viewportState.pViewports = &viewport;
+  viewportState.scissorCount = 1;
+  viewportState.pScissors = &scissor;
+
+  VkPipelineRasterizationStateCreateInfo rasterizer{};
+  rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+  rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+  rasterizer.cullMode = VK_CULL_MODE_NONE;
+  rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+  rasterizer.lineWidth = 1.0f;
+
+  VkPipelineMultisampleStateCreateInfo multisampling{};
+  multisampling.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+  multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+  VkPipelineColorBlendAttachmentState blendAttachment{};
+  blendAttachment.colorWriteMask =
+      VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  if (config.additiveBlend) {
+    // Additive blending: src=ONE, dst=ONE
+    blendAttachment.blendEnable = VK_TRUE;
+    blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+  } else {
+    blendAttachment.blendEnable = VK_FALSE;
+  }
+
+  VkPipelineColorBlendStateCreateInfo colorBlending{};
+  colorBlending.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+  colorBlending.attachmentCount = 1;
+  colorBlending.pAttachments = &blendAttachment;
+
+  VkGraphicsPipelineCreateInfo pipelineInfo{};
+  pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  pipelineInfo.stageCount = 2;
+  pipelineInfo.pStages = stages;
+  pipelineInfo.pVertexInputState = &vertexInput;
+  pipelineInfo.pInputAssemblyState = &inputAssembly;
+  pipelineInfo.pViewportState = &viewportState;
+  pipelineInfo.pRasterizationState = &rasterizer;
+  pipelineInfo.pMultisampleState = &multisampling;
+  pipelineInfo.pColorBlendState = &colorBlending;
+  pipelineInfo.layout = config.pipelineLayout;
+  pipelineInfo.renderPass = config.renderPass;
+  pipelineInfo.subpass = 0;
+
+  VkPipeline pipeline = VK_NULL_HANDLE;
+  if (vkCreateGraphicsPipelines(config.device, VK_NULL_HANDLE, 1, &pipelineInfo,
+                                nullptr, &pipeline) != VK_SUCCESS) {
+    vkDestroyShaderModule(config.device, vertModule, nullptr);
+    vkDestroyShaderModule(config.device, fragModule, nullptr);
+    throw std::runtime_error("Failed to create fullscreen pipeline");
+  }
+
+  vkDestroyShaderModule(config.device, vertModule, nullptr);
+  vkDestroyShaderModule(config.device, fragModule, nullptr);
+  return pipeline;
+}
+
 VkPipeline createComputePipeline(const ComputePipelineConfig &config) {
   auto computeShaderCode = readShaderFile(config.computeShaderPath);
   VkShaderModule computeShaderModule =

@@ -1,0 +1,90 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+struct Particle {
+    vec4 pos;
+    vec4 vel;
+};
+
+struct BHNode {
+    vec4 centerOfMass; // xyz = position, w = mass
+    vec4 bounds;       // xyz = center, w = size (width)
+    int children[8];   // children indices
+};
+
+layout(std430, binding = 0) readonly buffer InputParticles {
+    Particle particlesIn[];
+};
+
+layout(std430, binding = 1) writeonly buffer OutputParticles {
+    Particle particlesOut[];
+};
+
+layout(std430, binding = 2) readonly buffer BHNodes {
+    BHNode nodes[];
+};
+
+layout(push_constant) uniform PushConstants {
+    float dt;
+    float G;
+    float softeningSqr;
+    uint numParticles;
+    float theta;
+} pcs;
+
+bool isPointInside(vec3 p, vec3 center, float size) {
+    float halfSize = size * 0.5;
+    return (abs(p.x - center.x) <= halfSize + 1e-4) &&
+           (abs(p.y - center.y) <= halfSize + 1e-4) &&
+           (abs(p.z - center.z) <= halfSize + 1e-4);
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= pcs.numParticles) {
+        return;
+    }
+
+    vec4 myPos = particlesIn[index].pos;
+    vec4 myVel = particlesIn[index].vel;
+
+    vec3 accel = vec3(0.0);
+
+    // Stackless skip-pointer tree traversal
+    int nodeIdx = 0;
+    while (nodeIdx != -1) {
+        vec4 nodeCom = nodes[nodeIdx].centerOfMass;
+        if (nodeCom.w <= 0.0) {
+            nodeIdx = nodes[nodeIdx].children[1]; // skip empty subtree
+            continue;
+        }
+
+        vec4 nodeBounds = nodes[nodeIdx].bounds;
+        int nextIdx = nodes[nodeIdx].children[0];
+        int skipIdx = nodes[nodeIdx].children[1];
+
+        vec3 diff = nodeCom.xyz - myPos.xyz;
+        float distSqr = dot(diff, diff) + pcs.softeningSqr;
+        float dist = sqrt(distSqr);
+
+        bool isLeaf = (nextIdx == skipIdx);
+        float s = nodeBounds.w;
+
+        if (isLeaf || (s / dist < pcs.theta && !isPointInside(myPos.xyz, nodeBounds.xyz, s))) {
+            if (distSqr > 1e-5) {
+                float invDistCube = 1.0 / (distSqr * dist);
+                accel += pcs.G * nodeCom.w * diff * invDistCube;
+            }
+            nodeIdx = skipIdx;
+        } else {
+            nodeIdx = nextIdx;
+        }
+    }
+
+    vec3 newVel = myVel.xyz + accel * pcs.dt;
+    vec3 newPos = myPos.xyz + newVel * pcs.dt;
+
+    particlesOut[index].pos = vec4(newPos, myPos.w);
+    particlesOut[index].vel = vec4(newVel, myVel.w);
+}
