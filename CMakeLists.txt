@@ -76,12 +76,14 @@ add_executable(nfield
     src/main.cpp
     src/core/App.cpp
     src/core/Preset.cpp
+    src/core/Export.cpp
     src/vulkan/VulkanContext.cpp
     src/vulkan/Buffer.cpp
     src/vulkan/Pipeline.cpp
     include/core/App.hpp
     include/core/Preset.hpp
     include/core/SimState.hpp
+    include/core/Export.hpp
     include/vulkan/VulkanContext.hpp
     include/vulkan/Buffer.hpp
     include/vulkan/Pipeline.hpp

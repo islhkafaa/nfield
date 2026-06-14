@@ -4,9 +4,14 @@
 #include "core/SimState.hpp"
 #include "vulkan/Buffer.hpp"
 #include <GLFW/glfw3.h>
+#include <atomic>
+#include <condition_variable>
 #include <glm/glm.hpp>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <queue>
+#include <thread>
 #include <vector>
 
 struct QueueFamilyIndices {
@@ -44,15 +49,19 @@ public:
 
   VulkanContext(const VulkanContext &) = delete;
   VulkanContext &operator=(const VulkanContext &) = delete;
-  VulkanContext(VulkanContext &&) noexcept = default;
-  VulkanContext &operator=(VulkanContext &&) noexcept = default;
+  VulkanContext(VulkanContext &&) noexcept = delete;
+  VulkanContext &operator=(VulkanContext &&) noexcept = delete;
 
   void init(GLFWwindow *window);
   void cleanup();
 
-  void drawFrame(const glm::mat4 &viewProj, SimState &simState);
+  bool drawFrame(const glm::mat4 &viewProj, SimState &simState);
   void initParticles(uint32_t numParticles);
   void reloadParticles(const std::vector<Particle> &particles);
+  void readbackStats(SimState &simState);
+  std::vector<Particle> readbackParticles();
+  void appendParticle(const Particle &p);
+  void recreateSwapChain(GLFWwindow *window);
 
   VkInstance getInstance() const { return m_instance; }
   VkDevice getDevice() const { return m_device; }
@@ -225,6 +234,7 @@ private:
 
   uint32_t m_currentFrame = 0;
   uint32_t m_numParticles = 0;
+  float m_statsTimer = 0.0f;
 
   // GPU Timestamps
   VkQueryPool m_timestampPool = VK_NULL_HANDLE;
@@ -233,6 +243,27 @@ private:
   bool m_queryPoolHasResults[MAX_FRAMES_IN_FLIGHT] = {false, false};
   // 4 slots per frame-in-flight: [computeBegin, computeEnd, gfxBegin, gfxEnd]
   static constexpr uint32_t TIMESTAMPS_PER_FRAME = 4;
+
+  std::unique_ptr<Buffer> m_frameExportBuffer;
+  void *m_frameExportMapped = nullptr;
+  uint32_t m_frameExportIndex = 0;
+  std::thread m_frameWriteThread;
+  std::mutex m_frameQueueMutex;
+  std::condition_variable m_frameQueueCV;
+  struct FrameData {
+    std::vector<uint8_t> pixels;
+    uint32_t width;
+    uint32_t height;
+    uint32_t index;
+  };
+  std::queue<FrameData> m_frameQueue;
+  std::atomic<bool> m_frameWriterRunning{false};
+
+  void createFrameExportStagingBuffer();
+  void destroyFrameExportStagingBuffer();
+  void startFrameWriterThread();
+  void stopFrameWriterThread();
+  void cleanupSwapChainDependents();
 
   void initImGui(GLFWwindow *window);
   void shutdownImGui();

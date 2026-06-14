@@ -3,7 +3,9 @@
 #include "core/Camera.hpp"
 #include "core/SimState.hpp"
 #include "vulkan/VulkanContext.hpp"
+#include <atomic>
 #include <string_view>
+#include <thread>
 
 struct GLFWwindow;
 
@@ -30,6 +32,10 @@ private:
                                   int mods);
   static void scrollCallback(GLFWwindow *window, double xoffset,
                              double yoffset);
+  static void keyCallback(GLFWwindow *window, int key, int scancode, int action,
+                          int mods);
+  static void framebufferResizeCallback(GLFWwindow *window, int width,
+                                        int height);
 
   GLFWwindow *m_window = nullptr;
   VulkanContext m_vulkanContext;
@@ -40,4 +46,8 @@ private:
   bool m_rightMouseDown = false;
   double m_lastMouseX = 0.0;
   double m_lastMouseY = 0.0;
+  bool m_framebufferResized = false;
+
+  std::atomic<bool> m_exportBusy{false};
+  std::thread m_exportThread;
 };

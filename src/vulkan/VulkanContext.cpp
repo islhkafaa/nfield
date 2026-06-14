@@ -6,6 +6,16 @@
 #include "vulkan/Pipeline.hpp"
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#include "stb_image_write.h"
+#pragma GCC diagnostic pop
 #include <glm/gtc/constants.hpp>
 #include <iostream>
 #include <limits>
@@ -18,9 +28,9 @@ const std::vector<const char *> deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
 #ifdef NDEBUG
-constexpr bool enableValidationLayers = false;
+bool enableValidationLayers = false;
 #else
-constexpr bool enableValidationLayers = true;
+bool enableValidationLayers = true;
 #endif
 
 const std::vector<const char *> validationLayers = {
@@ -350,6 +360,145 @@ void VulkanContext::init(GLFWwindow *window) {
   createSyncPrimitives();
   createTimestampPool();
   initImGui(window);
+  createFrameExportStagingBuffer();
+  startFrameWriterThread();
+}
+
+void VulkanContext::cleanupSwapChainDependents() {
+  if (m_device == VK_NULL_HANDLE)
+    return;
+  vkDeviceWaitIdle(m_device);
+  destroyFrameExportStagingBuffer();
+  shutdownImGui();
+  if (m_timestampPool != VK_NULL_HANDLE) {
+    vkDestroyQueryPool(m_device, m_timestampPool, nullptr);
+    m_timestampPool = VK_NULL_HANDLE;
+  }
+  if (m_hdrFramebuffer != VK_NULL_HANDLE) {
+    vkDestroyFramebuffer(m_device, m_hdrFramebuffer, nullptr);
+    m_hdrFramebuffer = VK_NULL_HANDLE;
+  }
+  for (auto fb : m_swapChainFramebuffers) {
+    vkDestroyFramebuffer(m_device, fb, nullptr);
+  }
+  m_swapChainFramebuffers.clear();
+  auto destroyPipeline = [&](VkPipeline &p) {
+    if (p != VK_NULL_HANDLE) {
+      vkDestroyPipeline(m_device, p, nullptr);
+      p = VK_NULL_HANDLE;
+    }
+  };
+  auto destroyLayout = [&](VkPipelineLayout &l) {
+    if (l != VK_NULL_HANDLE) {
+      vkDestroyPipelineLayout(m_device, l, nullptr);
+      l = VK_NULL_HANDLE;
+    }
+  };
+  destroyPipeline(m_bloomThresholdPipeline);
+  destroyPipeline(m_bloomBlurPipeline);
+  destroyLayout(m_bloomComputeLayout);
+  destroyPipeline(m_compositePipeline);
+  destroyLayout(m_compositeLayout);
+  destroyPipeline(m_trailPipeline);
+  destroyLayout(m_trailLayout);
+  destroyPipeline(m_graphicsPipeline);
+  destroyLayout(m_graphicsPipelineLayout);
+  destroyPipeline(m_computePipeline);
+  destroyPipeline(m_bhComputePipeline);
+  destroyLayout(m_computePipelineLayout);
+  if (m_descriptorPool != VK_NULL_HANDLE) {
+    vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
+    m_descriptorPool = VK_NULL_HANDLE;
+  }
+  if (m_hdrSampler != VK_NULL_HANDLE) {
+    vkDestroySampler(m_device, m_hdrSampler, nullptr);
+    m_hdrSampler = VK_NULL_HANDLE;
+  }
+  if (m_hdrImageView != VK_NULL_HANDLE) {
+    vkDestroyImageView(m_device, m_hdrImageView, nullptr);
+    m_hdrImageView = VK_NULL_HANDLE;
+  }
+  if (m_hdrImage != VK_NULL_HANDLE) {
+    vkDestroyImage(m_device, m_hdrImage, nullptr);
+    m_hdrImage = VK_NULL_HANDLE;
+  }
+  if (m_hdrMemory != VK_NULL_HANDLE) {
+    vkFreeMemory(m_device, m_hdrMemory, nullptr);
+    m_hdrMemory = VK_NULL_HANDLE;
+  }
+  if (m_bloomSamplerA != VK_NULL_HANDLE) {
+    vkDestroySampler(m_device, m_bloomSamplerA, nullptr);
+    m_bloomSamplerA = VK_NULL_HANDLE;
+  }
+  if (m_bloomImageViewA != VK_NULL_HANDLE) {
+    vkDestroyImageView(m_device, m_bloomImageViewA, nullptr);
+    m_bloomImageViewA = VK_NULL_HANDLE;
+  }
+  if (m_bloomImageA != VK_NULL_HANDLE) {
+    vkDestroyImage(m_device, m_bloomImageA, nullptr);
+    m_bloomImageA = VK_NULL_HANDLE;
+  }
+  if (m_bloomMemoryA != VK_NULL_HANDLE) {
+    vkFreeMemory(m_device, m_bloomMemoryA, nullptr);
+    m_bloomMemoryA = VK_NULL_HANDLE;
+  }
+  if (m_bloomSamplerB != VK_NULL_HANDLE) {
+    vkDestroySampler(m_device, m_bloomSamplerB, nullptr);
+    m_bloomSamplerB = VK_NULL_HANDLE;
+  }
+  if (m_bloomImageViewB != VK_NULL_HANDLE) {
+    vkDestroyImageView(m_device, m_bloomImageViewB, nullptr);
+    m_bloomImageViewB = VK_NULL_HANDLE;
+  }
+  if (m_bloomImageB != VK_NULL_HANDLE) {
+    vkDestroyImage(m_device, m_bloomImageB, nullptr);
+    m_bloomImageB = VK_NULL_HANDLE;
+  }
+  if (m_bloomMemoryB != VK_NULL_HANDLE) {
+    vkFreeMemory(m_device, m_bloomMemoryB, nullptr);
+    m_bloomMemoryB = VK_NULL_HANDLE;
+  }
+  if (m_particleRenderPass != VK_NULL_HANDLE) {
+    vkDestroyRenderPass(m_device, m_particleRenderPass, nullptr);
+    m_particleRenderPass = VK_NULL_HANDLE;
+  }
+  if (m_compositeRenderPass != VK_NULL_HANDLE) {
+    vkDestroyRenderPass(m_device, m_compositeRenderPass, nullptr);
+    m_compositeRenderPass = VK_NULL_HANDLE;
+  }
+  for (auto imageView : m_swapChainImageViews) {
+    vkDestroyImageView(m_device, imageView, nullptr);
+  }
+  m_swapChainImageViews.clear();
+  if (m_swapChain != VK_NULL_HANDLE) {
+    vkDestroySwapchainKHR(m_device, m_swapChain, nullptr);
+    m_swapChain = VK_NULL_HANDLE;
+  }
+}
+
+void VulkanContext::recreateSwapChain(GLFWwindow *window) {
+  int width = 0, height = 0;
+  glfwGetFramebufferSize(window, &width, &height);
+  while (width == 0 || height == 0) {
+    glfwGetFramebufferSize(window, &width, &height);
+    glfwWaitEvents();
+  }
+  vkDeviceWaitIdle(m_device);
+  cleanupSwapChainDependents();
+  createSwapChain(window);
+  createImageViews();
+  createHDRImage();
+  createBloomImages();
+  createParticleRenderPass();
+  createCompositeRenderPass();
+  createPipelines();
+  createFramebuffers();
+  createDescriptorPool();
+  createDescriptorSets();
+  createBloomDescriptorSets();
+  createTimestampPool();
+  initImGui(window);
+  createFrameExportStagingBuffer();
 }
 
 void VulkanContext::cleanup() {
@@ -357,6 +506,8 @@ void VulkanContext::cleanup() {
     vkDeviceWaitIdle(m_device);
   }
 
+  stopFrameWriterThread();
+  destroyFrameExportStagingBuffer();
   shutdownImGui();
 
   // Timestamp pool
@@ -507,7 +658,10 @@ void VulkanContext::cleanup() {
 // Core
 void VulkanContext::createInstance() {
   if (enableValidationLayers && !checkValidationLayerSupport()) {
-    throw std::runtime_error("Validation layers requested, but not available");
+    std::cerr << "Validation layers requested, but not available. Disabling "
+                 "validation layers."
+              << std::endl;
+    enableValidationLayers = false;
   }
 
   VkApplicationInfo appInfo{};
@@ -676,7 +830,8 @@ void VulkanContext::createSwapChain(GLFWwindow *window) {
   createInfo.imageColorSpace = surfaceFormat.colorSpace;
   createInfo.imageExtent = extent;
   createInfo.imageArrayLayers = 1;
-  createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+  createInfo.imageUsage =
+      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
   QueueFamilyIndices indices = findQueueFamilies(m_physicalDevice);
   uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(),
@@ -2086,11 +2241,23 @@ void VulkanContext::recordCommandBuffer(VkCommandBuffer cmd,
 
 // drawFrame
 
-void VulkanContext::drawFrame(const glm::mat4 &viewProj, SimState &simState) {
+bool VulkanContext::drawFrame(const glm::mat4 &viewProj, SimState &simState) {
   VkFence fencesToWait[] = {m_inFlightFences[m_currentFrame],
                             m_computeInFlightFences[1 - m_currentFrame]};
   vkWaitForFences(m_device, 2, fencesToWait, VK_TRUE,
                   std::numeric_limits<uint64_t>::max());
+
+  double now = glfwGetTime();
+  static double lastTime = 0.0;
+  if (lastTime == 0.0) {
+    lastTime = now;
+  }
+  m_statsTimer += static_cast<float>(now - lastTime);
+  lastTime = now;
+  if (m_statsTimer >= 1.0f) {
+    readbackStats(simState);
+    m_statsTimer = 0.0f;
+  }
 
   // Read timestamps from the previous submission of this frame slot
   if (m_timestampSupported && m_timestampPool != VK_NULL_HANDLE &&
@@ -2118,14 +2285,15 @@ void VulkanContext::drawFrame(const glm::mat4 &viewProj, SimState &simState) {
       m_imageAvailableSemaphores[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
 
   if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-    return;
+    return true;
   } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
     throw std::runtime_error("Failed to acquire swap chain image");
   }
 
   m_cameraUBOs[m_currentFrame]->write(&viewProj, sizeof(viewProj));
 
-  float dt = simState.paused ? 0.0f : simState.dt;
+  float dt = (simState.paused && !simState.singleStep) ? 0.0f : simState.dt;
+  simState.singleStep = false;
 
   if (simState.algorithm == SimState::Algorithm::BarnesHut) {
     void *mapped = m_particleBuffers[m_currentFrame]->map();
@@ -2267,9 +2435,77 @@ void VulkanContext::drawFrame(const glm::mat4 &viewProj, SimState &simState) {
   presentInfo.pSwapchains = swapChains;
   presentInfo.pImageIndices = &imageIndex;
 
-  vkQueuePresentKHR(m_presentQueue, &presentInfo);
+  VkResult presentResult = vkQueuePresentKHR(m_presentQueue, &presentInfo);
+  if (presentResult == VK_ERROR_OUT_OF_DATE_KHR ||
+      presentResult == VK_SUBOPTIMAL_KHR) {
+    return true;
+  }
+
+  if (simState.recordingFrames && m_frameExportBuffer) {
+    vkDeviceWaitIdle(m_device);
+    VkCommandBuffer cmd = beginSingleTimeCommands();
+    VkImageMemoryBarrier barrierToSrc{};
+    barrierToSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrierToSrc.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrierToSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrierToSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrierToSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrierToSrc.image = m_swapChainImages[imageIndex];
+    barrierToSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    barrierToSrc.srcAccessMask = 0;
+    barrierToSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &barrierToSrc);
+    VkBufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageOffset = {0, 0, 0};
+    region.imageExtent = {m_swapChainExtent.width, m_swapChainExtent.height, 1};
+    vkCmdCopyImageToBuffer(cmd, m_swapChainImages[imageIndex],
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           m_frameExportBuffer->getBuffer(), 1, &region);
+    VkImageMemoryBarrier barrierToPresent{};
+    barrierToPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrierToPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrierToPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrierToPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrierToPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrierToPresent.image = m_swapChainImages[imageIndex];
+    barrierToPresent.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    barrierToPresent.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrierToPresent.dstAccessMask = 0;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &barrierToPresent);
+    endSingleTimeCommands(cmd);
+    const uint8_t *srcBytes = static_cast<const uint8_t *>(m_frameExportMapped);
+    std::vector<uint8_t> pixels(m_swapChainExtent.width *
+                                m_swapChainExtent.height * 4);
+    if (m_swapChainImageFormat == VK_FORMAT_B8G8R8A8_UNORM ||
+        m_swapChainImageFormat == VK_FORMAT_B8G8R8A8_SRGB) {
+      for (size_t i = 0; i < pixels.size(); i += 4) {
+        pixels[i + 0] = srcBytes[i + 2];
+        pixels[i + 1] = srcBytes[i + 1];
+        pixels[i + 2] = srcBytes[i + 0];
+        pixels[i + 3] = srcBytes[i + 3];
+      }
+    } else {
+      std::memcpy(pixels.data(), srcBytes, pixels.size());
+    }
+    {
+      std::lock_guard<std::mutex> lock(m_frameQueueMutex);
+      m_frameQueue.push(FrameData{std::move(pixels), m_swapChainExtent.width,
+                                  m_swapChainExtent.height,
+                                  m_frameExportIndex++});
+    }
+    m_frameQueueCV.notify_one();
+  }
 
   m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+  return false;
 }
 
 // Particle management
@@ -2363,6 +2599,40 @@ void VulkanContext::reloadParticles(const std::vector<Particle> &particles) {
   endSingleTimeCommands(cmd);
 }
 
+void VulkanContext::readbackStats(SimState &simState) {
+  void *mapped = m_particleBuffers[m_currentFrame]->map();
+  const Particle *particles = static_cast<const Particle *>(mapped);
+  double totalKE = 0.0;
+  glm::dvec3 totalP{0.0, 0.0, 0.0};
+  for (uint32_t i = 0; i < m_numParticles; ++i) {
+    float mass = particles[i].pos.w;
+    glm::vec3 vel = glm::vec3(particles[i].vel);
+    double speedSqr = glm::dot(vel, vel);
+    totalKE += 0.5 * mass * speedSqr;
+    totalP += glm::dvec3(vel) * static_cast<double>(mass);
+  }
+  m_particleBuffers[m_currentFrame]->unmap();
+  simState.totalKineticEnergy = static_cast<float>(totalKE);
+  simState.totalMomentum = static_cast<float>(glm::length(totalP));
+}
+
+std::vector<Particle> VulkanContext::readbackParticles() {
+  if (m_device != VK_NULL_HANDLE) {
+    vkDeviceWaitIdle(m_device);
+  }
+  std::vector<Particle> particles(m_numParticles);
+  void *mapped = m_particleBuffers[m_currentFrame]->map();
+  std::memcpy(particles.data(), mapped, m_numParticles * sizeof(Particle));
+  m_particleBuffers[m_currentFrame]->unmap();
+  return particles;
+}
+
+void VulkanContext::appendParticle(const Particle &p) {
+  std::vector<Particle> particles = readbackParticles();
+  particles.push_back(p);
+  reloadParticles(particles);
+}
+
 // ImGui
 
 void VulkanContext::initImGui(GLFWwindow *window) {
@@ -2440,4 +2710,62 @@ void VulkanContext::shutdownImGui() {
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
   }
+}
+
+void VulkanContext::createFrameExportStagingBuffer() {
+  VkDeviceSize bufferSize =
+      m_swapChainExtent.width * m_swapChainExtent.height * 4;
+  m_frameExportBuffer = std::make_unique<Buffer>(
+      m_device, m_physicalDevice, bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  m_frameExportMapped = m_frameExportBuffer->map();
+}
+
+void VulkanContext::destroyFrameExportStagingBuffer() {
+  if (m_frameExportBuffer) {
+    m_frameExportBuffer->unmap();
+    m_frameExportBuffer.reset();
+  }
+  m_frameExportMapped = nullptr;
+}
+
+void VulkanContext::startFrameWriterThread() {
+  m_frameWriterRunning = true;
+  m_frameWriteThread = std::thread([this]() {
+    while (m_frameWriterRunning) {
+      FrameData data;
+      {
+        std::unique_lock<std::mutex> lock(m_frameQueueMutex);
+        m_frameQueueCV.wait(lock, [this]() {
+          return !m_frameQueue.empty() || !m_frameWriterRunning;
+        });
+        if (!m_frameWriterRunning && m_frameQueue.empty()) {
+          break;
+        }
+        data = std::move(m_frameQueue.front());
+        m_frameQueue.pop();
+      }
+      char filename[256];
+      std::snprintf(filename, sizeof(filename), "frames/frame_%04u.png",
+                    data.index);
+#ifdef _WIN32
+      _mkdir("frames");
+#else
+      mkdir("frames", 0777);
+#endif
+      stbi_write_png(filename, data.width, data.height, 4, data.pixels.data(),
+                     data.width * 4);
+    }
+  });
+}
+
+void VulkanContext::stopFrameWriterThread() {
+  m_frameWriterRunning = false;
+  m_frameQueueCV.notify_all();
+  if (m_frameWriteThread.joinable()) {
+    m_frameWriteThread.join();
+  }
+  std::queue<FrameData> empty;
+  std::swap(m_frameQueue, empty);
 }

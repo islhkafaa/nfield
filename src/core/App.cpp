@@ -1,4 +1,5 @@
 #include "core/App.hpp"
+#include "core/Export.hpp"
 #include "core/Preset.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -28,7 +29,7 @@ void App::initWindow(int width, int height, std::string_view title) {
   }
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+  glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
   m_window = glfwCreateWindow(width, height, title.data(), nullptr, nullptr);
   if (!m_window) {
@@ -49,6 +50,8 @@ void App::initWindow(int width, int height, std::string_view title) {
   glfwSetCursorPosCallback(m_window, cursorPositionCallback);
   glfwSetMouseButtonCallback(m_window, mouseButtonCallback);
   glfwSetScrollCallback(m_window, scrollCallback);
+  glfwSetKeyCallback(m_window, keyCallback);
+  glfwSetFramebufferSizeCallback(m_window, framebufferResizeCallback);
 }
 
 void App::initVulkan() {
@@ -64,6 +67,10 @@ void App::initVulkan() {
 }
 
 void App::cleanup() {
+  if (m_exportThread.joinable()) {
+    m_exportThread.join();
+  }
+
   m_vulkanContext.cleanup();
 
   if (m_window) {
@@ -123,6 +130,40 @@ void App::scrollCallback(GLFWwindow *window, double xoffset, double yoffset) {
   }
 }
 
+void App::keyCallback(GLFWwindow *window, int key, int scancode, int action,
+                      int mods) {
+  (void)scancode;
+  (void)mods;
+  if (ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureKeyboard) {
+    return;
+  }
+  auto *app = static_cast<App *>(glfwGetWindowUserPointer(window));
+  if (app) {
+    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS) {
+      glm::vec3 spawnPos = app->m_camera.getTarget();
+      glm::vec3 dir = glm::vec3(0.0f, 1.0f, 0.0f);
+      if (glm::length(app->m_simState.spawnVelocityDir) > 1e-4f) {
+        dir = glm::normalize(app->m_simState.spawnVelocityDir);
+      }
+      glm::vec3 vel = dir * app->m_simState.spawnSpeed;
+      Particle p;
+      p.pos = glm::vec4(spawnPos, app->m_simState.spawnMass);
+      p.vel = glm::vec4(vel, 0.0f);
+      app->m_vulkanContext.appendParticle(p);
+      app->m_simState.numParticles++;
+    }
+  }
+}
+
+void App::framebufferResizeCallback(GLFWwindow *window, int width, int height) {
+  (void)width;
+  (void)height;
+  auto *app = static_cast<App *>(glfwGetWindowUserPointer(window));
+  if (app) {
+    app->m_framebufferResized = true;
+  }
+}
+
 void App::run() {
   float lastTime = static_cast<float>(glfwGetTime());
 
@@ -136,6 +177,16 @@ void App::run() {
 
   while (!glfwWindowShouldClose(m_window)) {
     glfwPollEvents();
+
+    if (m_framebufferResized) {
+      m_vulkanContext.recreateSwapChain(m_window);
+      int w = 0, h = 0;
+      glfwGetFramebufferSize(m_window, &w, &h);
+      if (h > 0) {
+        m_camera.setAspect(static_cast<float>(w) / h);
+      }
+      m_framebufferResized = false;
+    }
 
     float currentTime = static_cast<float>(glfwGetTime());
     float dt = currentTime - lastTime;
@@ -166,6 +217,12 @@ void App::run() {
       if (ImGui::CollapsingHeader("Simulation Controls",
                                   ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("Pause Simulation", &m_simState.paused);
+        if (m_simState.paused) {
+          ImGui::SameLine();
+          if (ImGui::Button("Step")) {
+            m_simState.singleStep = true;
+          }
+        }
 
         ImGui::SliderFloat("Time Step (dt)", &m_simState.dt, 0.0001f, 0.01f,
                            "%.4f");
@@ -258,26 +315,107 @@ void App::run() {
         }
       }
 
-      if (ImGui::CollapsingHeader("Performance Metrics",
+      if (ImGui::CollapsingHeader("Data Export",
                                   ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Text("FPS: %.1f", currentFPS);
-        ImGui::Text("CPU Frame: %.2f ms", currentFrameTimeMs);
-        if (m_simState.gpuComputeMs > 0.0f) {
-          ImGui::Text("GPU Compute: %.3f ms", m_simState.gpuComputeMs);
+        if (m_exportBusy) {
+          ImGui::TextDisabled("Export in progress...");
         } else {
-          ImGui::TextDisabled("GPU Compute: N/A");
+          if (ImGui::Button("Export CSV", ImVec2(120, 0))) {
+            m_exportBusy = true;
+            if (m_exportThread.joinable()) {
+              m_exportThread.join();
+            }
+            std::vector<Particle> particles =
+                m_vulkanContext.readbackParticles();
+            m_exportThread = std::thread([this,
+                                          particles = std::move(particles)]() {
+              try {
+                exportParticlesCSV(
+                    particles,
+                    "particles_" + std::to_string(particles.size()) + ".csv");
+              } catch (...) {
+              }
+              m_exportBusy = false;
+            });
+          }
+          ImGui::SameLine();
+          if (ImGui::Button("Export Binary", ImVec2(120, 0))) {
+            m_exportBusy = true;
+            if (m_exportThread.joinable()) {
+              m_exportThread.join();
+            }
+            std::vector<Particle> particles =
+                m_vulkanContext.readbackParticles();
+            m_exportThread = std::thread([this,
+                                          particles = std::move(particles)]() {
+              try {
+                exportParticlesBinary(
+                    particles,
+                    "particles_" + std::to_string(particles.size()) + ".bin");
+              } catch (...) {
+              }
+              m_exportBusy = false;
+            });
+          }
         }
-        ImGui::Text("Bodies: %d", m_simState.numParticles);
+        ImGui::Separator();
+        ImGui::Checkbox("Record Frames", &m_simState.recordingFrames);
+
+        if (ImGui::CollapsingHeader("Interactive Spawner",
+                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+          ImGui::SliderFloat("Spawn Mass", &m_simState.spawnMass, 0.1f, 1000.0f,
+                             "%.1f");
+          ImGui::SliderFloat("Spawn Speed", &m_simState.spawnSpeed, 0.0f, 10.0f,
+                             "%.2f");
+          ImGui::InputFloat3("Spawn Velocity Dir",
+                             &m_simState.spawnVelocityDir.x, "%.2f");
+          if (ImGui::Button("Spawn at Target", ImVec2(-1, 0))) {
+            glm::vec3 spawnPos = m_camera.getTarget();
+            glm::vec3 dir = glm::vec3(0.0f, 1.0f, 0.0f);
+            if (glm::length(m_simState.spawnVelocityDir) > 1e-4f) {
+              dir = glm::normalize(m_simState.spawnVelocityDir);
+            }
+            glm::vec3 vel = dir * m_simState.spawnSpeed;
+            Particle p;
+            p.pos = glm::vec4(spawnPos, m_simState.spawnMass);
+            p.vel = glm::vec4(vel, 0.0f);
+            m_vulkanContext.appendParticle(p);
+            m_simState.numParticles++;
+          }
+          ImGui::TextDisabled("Or press Space (when viewport is focused)");
+        }
+
+        if (ImGui::CollapsingHeader("Physics Diagnostics",
+                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+          ImGui::Text("Total Kinetic Energy: %.4e",
+                      m_simState.totalKineticEnergy);
+          ImGui::Text("Total Momentum: %.4e", m_simState.totalMomentum);
+        }
+
+        if (ImGui::CollapsingHeader("Performance Metrics",
+                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+          ImGui::Text("FPS: %.1f", currentFPS);
+          ImGui::Text("CPU Frame: %.2f ms", currentFrameTimeMs);
+          if (m_simState.gpuComputeMs > 0.0f) {
+            ImGui::Text("GPU Compute: %.3f ms", m_simState.gpuComputeMs);
+          } else {
+            ImGui::TextDisabled("GPU Compute: N/A");
+          }
+          ImGui::Text("Bodies: %d", m_simState.numParticles);
+        }
+      }
+      ImGui::End();
+
+      ImGui::Render();
+
+      if (m_vulkanContext.drawFrame(m_camera.getViewProjectionMatrix(),
+                                    m_simState)) {
+        m_framebufferResized = true;
       }
     }
-    ImGui::End();
 
-    ImGui::Render();
-
-    m_vulkanContext.drawFrame(m_camera.getViewProjectionMatrix(), m_simState);
-  }
-
-  if (m_vulkanContext.getDevice() != VK_NULL_HANDLE) {
-    vkDeviceWaitIdle(m_vulkanContext.getDevice());
+    if (m_vulkanContext.getDevice() != VK_NULL_HANDLE) {
+      vkDeviceWaitIdle(m_vulkanContext.getDevice());
+    }
   }
 }

@@ -32,6 +32,8 @@ public:
     m_target += right * deltaX + up * deltaY;
   }
 
+  glm::vec3 getTarget() const { return m_target; }
+
   glm::vec3 getPosition() const {
     float cosPitch = glm::cos(m_pitch);
     glm::vec3 offset(m_distance * glm::sin(m_yaw) * cosPitch,
